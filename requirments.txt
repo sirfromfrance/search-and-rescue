@@ -1,0 +1,8 @@
+flask
+pymongo
+pillow
+piexif
+opencv-python
+ultralytics
+python-dotenv
+flask-cors

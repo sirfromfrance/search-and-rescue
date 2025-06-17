@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Детекція людини</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        padding: 2rem;
+        background: linear-gradient(135deg, #e0e7ff, #f0f4f8);
+        color: #333;
+        margin: 0;
+        min-height: 100vh;
+      }
+      h1 {
+        color: #1e40af;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .upload-container {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        margin-bottom: 2rem;
+      }
+      #fileInput {
+        padding: 0.5rem;
+        border: 2px solid #91c3fd;
+        border-radius: 4px;
+        background: #fff;
+        font-size: 1rem;
+      }
+      button {
+        padding: 0.5rem 1.5rem;
+        background-color: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 1rem;
+        transition: background-color 0.3s;
+      }
+      button:hover {
+        background-color: #2563eb;
+      }
+      #result {
+        background: #ffffff;
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 2rem;
+      }
+      #result p {
+        margin: 0.5rem 0;
+        font-size: 1.1rem;
+      }
+      #resultImage {
+        max-width: 100%;
+        border: 2px solid #93c5fd;
+        border-radius: 4px;
+        display: none;
+      }
+      .image-container {
+        position: relative;
+        display: block;
+        margin: 1rem 0;
+      }
+      #overlayCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        display: none;
+      }
+      #detectionsList {
+        list-style-type: none;
+        padding: 0;
+      }
+      #detectionsList li {
+        background: #f9fafb;
+        padding: 0.75rem;
+        margin: 0.5rem 0;
+        border-radius: 4px;
+        border-left: 4px solid #3b82f6;
+      }
+      #map {
+        width: 100%;
+        height: 600px;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .loading {
+        text-align: center;
+        color: #666;
+        font-style: italic;
+      }
+      .error {
+        color: red;
+        background: #fef2f2;
+        padding: 1rem;
+        border-radius: 4px;
+        border: 1px solid #fecaca;
+        margin: 1rem 0;
+      }
+      .debug {
+        background: #e0f2fe;
+        padding: 1rem;
+        border-radius: 4px;
+        border: 1px solid #b3e5fc;
+        margin: 1rem 0;
+        font-family: monospace;
+        font-size: 0.9rem;
+      }
+      @media (max-width: 768px) {
+        body {
+          padding: 1rem;
+        }
+        #map {
+          height: 400px;
+        }
+        .upload-container {
+          flex-direction: column;
+          align-items: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Завантаження фото</h1>
+    <div class="upload-container">
+      <input type="file" id="fileInput" accept="image/*" />
+      <button onclick="uploadFile()">Завантажити</button>
+    </div>
+
+    <div id="result" style="display: none">
+      <p><strong>Координати:</strong> <span id="coords"></span></p>
+      <p><strong>Кількість людей:</strong> <span id="humansCount"></span></p>
+      <div class="image-container">
+        <img id="resultImage" src="" />
+        <canvas id="overlayCanvas"></canvas>
+      </div>
+      <ul id="detectionsList"></ul>
+      <div id="debugInfo" class="debug" style="display: none"></div>
+    </div>
+
+    <div id="map" style="width: 100%; height: 500px; margin-top: 20px"></div>
+
+    <script>
+      // Ініціалізація карти
+      const map = L.map("map").setView([50.45, 30.52], 6);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+
+      // Функція для завантаження існуючих детекцій на карту
+      function loadDetectionsOnMap() {
+        console.log("Loading existing detections on map...");
+        fetch("http://localhost:8000/detections/with_coords")
+          .then((res) => {
+            console.log("Response status:", res.status);
+            if (!res.ok) {
+              throw new Error(`HTTP error! status: ${res.status}`);
+            }
+            return res.json();
+          })
+          .then((data) => {
+            console.log("Detections data received for map:", data);
+
+            // Перевіряємо структуру відповіді
+            let detections = [];
+            if (data.detections && Array.isArray(data.detections)) {
+              detections = data.detections;
+            } else if (Array.isArray(data)) {
+              detections = data;
+            }
+
+            console.log(`Found ${detections.length} detections to display`);
+
+            detections.forEach((item, index) => {
+              console.log(`Processing detection ${index}:`, item);
+
+              if (
+                item.photo_coordinates &&
+                item.photo_coordinates.lat != null &&
+                item.photo_coordinates.lon != null
+              ) {
+                console.log(
+                  `Adding marker at: ${item.photo_coordinates.lat}, ${item.photo_coordinates.lon}`
+                );
+
+                L.marker([
+                  item.photo_coordinates.lat,
+                  item.photo_coordinates.lng || item.photo_coordinates.lon,
+                ])
+                  .addTo(map)
+                  .bindPopup(
+                    `<div>
+                      <p>Впевненість: ${(item.confidence * 100).toFixed(1)}%</p>
+                      <p>Час: ${new Date(item.timestamp).toLocaleString()}</p>
+                      ${
+                        item.photo_url
+                          ? `<img src="${item.photo_url}" style="max-width: 200px;" onerror="this.style.display='none'">`
+                          : ""
+                      }
+                    </div>`
+                  );
+              } else {
+                console.log(
+                  `Detection ${index} has no valid coordinates:`,
+                  item.photo_coordinates
+                );
+              }
+            });
+          })
+          .catch((err) => {
+            console.error("Error loading detections for map:", err);
+          });
+      }
+
+      // Завантажуємо існуючі детекції при завантаженні сторінки
+      loadDetectionsOnMap();
+
+      async function uploadFile() {
+        const input = document.getElementById("fileInput");
+        const resultDiv = document.getElementById("result");
+        const debugDiv = document.getElementById("debugInfo");
+
+        if (!input.files.length) {
+          alert("Оберіть файл");
+          return;
+        }
+
+        // Показуємо індикатор завантаження
+        resultDiv.innerHTML = '<p class="loading">Обробка зображення...</p>';
+        resultDiv.style.display = "block";
+
+        const formData = new FormData();
+        formData.append("file", input.files[0]);
+
+        try {
+          console.log("Uploading file...");
+          const res = await fetch("http://localhost:8000/upload/", {
+            method: "POST",
+            body: formData,
+          });
+
+          console.log("Upload response status:", res.status);
+
+          if (!res.ok) {
+            const errorText = await res.text();
+            console.error("Upload error response:", errorText);
+            throw new Error(
+              `HTTP error! Status: ${res.status}, Response: ${errorText}`
+            );
+          }
+
+          const data = await res.json();
+          console.log("Parsed JSON data:", data);
+
+          // Показуємо debug інформацію
+          debugDiv.innerHTML = `<strong>Debug Info:</strong><br>
+            Raw response: ${JSON.stringify(data, null, 2)}`;
+          debugDiv.style.display = "block";
+
+          if (data.status === "ok") {
+            // Відновлюємо оригінальну структуру HTML
+            resultDiv.innerHTML = `
+              <p><strong>Координати:</strong> <span id="coords"></span></p>
+              <p><strong>Кількість людей:</strong> <span id="humansCount"></span></p>
+              <div class="image-container">
+                <img id="resultImage" src="" />
+                <canvas id="overlayCanvas"></canvas>
+              </div>
+              <ul id="detectionsList"></ul>
+              <div id="debugInfo" class="debug">${debugDiv.innerHTML}</div>
+            `;
+
+            // Заповнюємо дані
+            const coordsSpan = document.getElementById("coords");
+            const humansCountSpan = document.getElementById("humansCount");
+            const img = document.getElementById("resultImage");
+            const list = document.getElementById("detectionsList");
+
+            // Координати
+            if (data.coords && (data.coords.lat || data.coords.latitude)) {
+              const lat = data.coords.lat || data.coords.latitude;
+              const lon = data.coords.lon || data.coords.longitude;
+              coordsSpan.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+              console.log(`Coordinates found: ${lat}, ${lon}`);
+            } else {
+              coordsSpan.textContent = "Немає координат";
+              console.log("No coordinates found in response");
+            }
+
+            // Кількість людей
+            const humanCount =
+              data.humans || (data.detections ? data.detections.length : 0);
+            humansCountSpan.textContent = humanCount;
+
+            // Зображення
+            if (data.photo_url) {
+              console.log("Setting image source:", data.photo_url);
+              img.src = data.photo_url;
+              img.style.display = "block";
+
+              // Додаємо обробник завантаження зображення
+              img.onload = function () {
+                console.log("Image loaded successfully");
+              };
+
+              // Додаємо обробник помилки завантаження зображення
+              img.onerror = function () {
+                console.error("Failed to load image:", data.photo_url);
+                this.style.display = "none";
+                this.parentNode.innerHTML +=
+                  '<p class="error">Не вдалося завантажити зображення</p>';
+              };
+            } else {
+              console.log("No photo_url in response");
+            }
+
+            // Список детекцій
+            list.innerHTML = "";
+            if (data.detections && data.detections.length > 0) {
+              data.detections.forEach((detection, index) => {
+                console.log(`Processing detection ${index}:`, detection);
+                const li = document.createElement("li");
+                li.innerHTML = `
+                  <strong>Впевненість:</strong> ${(
+                    detection.confidence * 100
+                  ).toFixed(1)}%<br>
+                  <strong>Координати об'єкта:</strong> [${
+                    detection.bbox?.x1 || "N/A"
+                  }, ${detection.bbox?.y1 || "N/A"}, ${
+                  detection.bbox?.x2 || "N/A"
+                }, ${detection.bbox?.y2 || "N/A"}]<br>
+                  <strong>Час:</strong> ${new Date(
+                    detection.timestamp
+                  ).toLocaleString()}
+                `;
+                list.appendChild(li);
+              });
+
+              // Додаємо нову детекцію на карту, якщо є координати
+              if (data.coords && (data.coords.lat || data.coords.latitude)) {
+                const lat = data.coords.lat || data.coords.latitude;
+                const lon = data.coords.lon || data.coords.longitude;
+
+                console.log(`Adding new marker at: ${lat}, ${lon}`);
+
+                const marker = L.marker([lat, lon])
+                  .addTo(map)
+                  .bindPopup(
+                    `<div>
+                      <p>Нова детекція</p>
+                      <p>Кількість людей: ${humanCount}</p>
+                      <p>Час: ${new Date().toLocaleString()}</p>
+                      ${
+                        data.photo_url
+                          ? `<img src="${data.photo_url}" style="max-width: 200px;" onerror="this.style.display='none';">`
+                          : ""
+                      }
+                    </div>`
+                  );
+
+                // Центруємо карту на новій детекції
+                map.setView([lat, lon], 15);
+                marker.openPopup();
+
+                console.log("Marker added and map centered");
+              } else {
+                console.log("No coordinates available for map marker");
+              }
+            } else {
+              list.innerHTML = "<li>Людей не знайдено</li>";
+              console.log("No detections found");
+            }
+          } else {
+            resultDiv.innerHTML =
+              '<p class="error">Людей не знайдено або сталася помилка обробки.</p>';
+            console.log("Response status is not 'ok'");
+          }
+        } catch (error) {
+          console.error("Upload error:", error);
+          resultDiv.innerHTML = `<p class="error">Помилка завантаження: ${error.message}</p>`;
+        }
+      }
+    </script>
+  </body>
+</html>
