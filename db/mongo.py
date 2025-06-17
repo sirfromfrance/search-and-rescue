@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-uri = os.getenv("MONGO_URI", "mongodb+srv://gritsenko5555:qLwG64zZUqxFOODI@cluster0.mysb9vu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+uri = os.getenv("MONGO_URI", "")
 collection = None
 
 try:
